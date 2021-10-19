@@ -1,0 +1,569 @@
+# -*- coding: utf-8 -*-
+# -*- coding: utf-8 -*-
+
+"""
+Created on Tue Dec 24 18:25:34 2019
+
+@author: lanpingli
+"""
+from __future__ import division, print_function, absolute_import
+#absolute_import ：绝对导入，其作用是导入模块的时候如果在当前项目目录下包含相同的模块，则优先导入标准库，也就是说如果你的当前目录有有个time模块，import time导入的仍然是Python官方的time标准库
+#division：精确除法，默认情况下2/4的结果是0，导入division后结果是0.5
+#print_function：print可以作为函数使用，在Python2中 print的书写格式是print xxx，python3中是print(xxx)，print_function可以使得python2使用python3的格式
+
+import matplotlib.pyplot as plt
+import numpy as np
+import tensorflow as tf
+import tensorflow.compat.v1 as tf1
+tf1.disable_v2_behavior()  #tf1的代码改为tf2可以运行的：
+
+   
+
+#get_ipython().run_line_magic('matplotlib', 'inline')该代码只能在 jupyter notebook 或者 ipython 下使用，不可以使用 python直接执行
+import scipy.io as sio
+import copy
+
+import math
+
+## Import MNIST data   导入MNIST数据集
+#from tensorflow.examples.tutorials.mnist import input_data
+#mnist = input_data.read_data_sets("/tmp/data/", one_hot=True)
+learning_rate=0.001#学习率
+n_epoch=100#迭代次数
+batch_size=100#一次训练所选取的样本数。Batch Size的大小影响模型的优化程度和速度。同时其直接影响到GPU内存的使用情况
+n_batch=1001
+
+L=1  #  upsamples
+
+
+
+M = 2
+
+##
+#M = 4
+#modulator = fundamental.QAM(M)  ###PSK(M),QAM(M),BPSK()
+
+#Nsubc = n_input
+modulation_level = M
+
+kbit_per_symbol=np.log2(M).astype(int)#log2（M）转化为整型
+
+
+
+##
+######papr峰值均值比
+
+def papr_compute(x_time):#峰值均值比计算
+    x_org_squ=np.square(x_time.real)+np.square(x_time.imag)
+    #print(x_org_squ.mean(axis=0))
+    papr_org=x_org_squ.max(axis=0)/x_org_squ.mean(axis=0)
+
+    papr_org_db=10*np.log10(papr_org)#db表示
+#    print(papr_org_db)
+    return papr_org_db
+
+######papr <3db,lable为1
+def papr_lable_compute(xtrain,papr_org_db): 
+   
+    n_num=len(papr_org_db)
+    papr_label = np.zeros((n_num, 1))#返回一个数组
+    
+    #print("xtrain",xtrain)
+    xtrain1=np.transpose(xtrain)#转置矩阵
+    #print("xtrain1",xtrain1)
+    xtrain_papr_true=[]
+    papr_db_true=[]
+    for n in range(n_num):
+        if papr_org_db[n]<3:
+            papr_label[n]=1
+            xtrain_papr_true.append(xtrain1[n,:])
+            papr_db_true.append(papr_org_db[n])
+    #print(xtrain_papr_true)
+#    print(len(xtrain_papr_true))
+
+    return xtrain_papr_true,papr_db_true
+
+###########papr <thresholsdb临界值,lable为1？存在重复
+def papr_lable_compute_thres(xtrain,papr_org_db,threshols):
+    n_num=len(papr_org_db)
+    papr_label = np.zeros((n_num, 1))
+    
+    #print("xtrain",xtrain)
+    xtrain1=np.transpose(xtrain)
+    #print("xtrain1",xtrain1)
+    xtrain_papr_true=[]
+    papr_db_true=[]
+    for n in range(n_num):
+        if papr_org_db[n]<threshols:
+            papr_label[n]=1
+            xtrain_papr_true.append(xtrain1[n,:])
+            papr_db_true.append(papr_org_db[n])
+    #print(xtrain_papr_true)
+#    print(len(xtrain_papr_true))
+
+    return xtrain_papr_true,papr_db_true  
+###########papr <thresholsdb,lable为1,data和onlydata
+def papr_lable_compute_thres_hole(xtrain,xtrain_onlydata,papr_org_db,threshols):
+    n_num=len(papr_org_db)
+    papr_label = np.zeros((n_num, 1))
+    
+    #print("xtrain",xtrain)
+    xtrain1=np.transpose(xtrain)
+    #print("xtrain1",xtrain1)
+    xtrain_onlydata1=np.transpose(xtrain_onlydata)
+    xtrainonlydata_papr_true=[]
+    xtrain_papr_true=[]
+    papr_db_true=[]
+    for n in range(n_num):
+        if papr_org_db[n]<threshols:
+            papr_label[n]=1
+            xtrain_papr_true.append(xtrain1[n,:])
+            xtrainonlydata_papr_true.append(xtrain_onlydata1[n,:])
+            papr_db_true.append(papr_org_db[n])
+    #print(xtrain_papr_true)
+#    print(len(xtrain_papr_true))
+
+    return xtrain_papr_true,xtrainonlydata_papr_true,papr_db_true 
+
+###########papr <thresholsdb,lable为1,data和onlydata
+def metric_lable_compute_thres(xtrain,papr_org_db,threshols):
+    n_num=len(papr_org_db)
+    papr_label = np.zeros((n_num, 1))
+    
+    #print("xtrain",xtrain)
+   
+    #print("xtrain1",xtrain1)
+    xtrain_papr_true=[]
+    papr_db_true=[]
+    for n in range(n_num):
+        if papr_org_db[n]<=threshols:         ########因为cdma的metric全是0，所以加了等号
+            papr_label[n]=1
+            xtrain_papr_true.append(xtrain[n,:])
+           
+            papr_db_true.append(papr_org_db[n])
+    #print(xtrain_papr_true)
+#    print(len(xtrain_papr_true))
+
+    return xtrain_papr_true,papr_db_true 
+
+
+#####非周期，补0
+def correlation(f, g):
+    n, m = f.size, g.size
+#    y = np.zeros(n+m-1, dtype=float)
+    y = np.zeros(n+m-1, dtype=complex)
+    g = g[::-1]  ####和卷积不同的地方
+
+    f, g = np.r_[f, np.zeros(y.size-n)], np.r_[g, np.zeros(y.size-m)]#np.r_是按列连接两个矩阵，就是把两矩阵上下相加，要求列数相等。
+#    print(f)
+#    print(g)
+    for i in range(y.size):
+        for j in range(y.size):
+#            print(f[j],g[i-j])
+            y[i] += np.multiply(f[j],np.conjugate(g[i-j]))#数组和矩阵对应位置相乘，输出与相乘数组/矩阵的大小一致；共轭
+#            print(y)
+    y_norm=y/n
+    return y_norm
+
+def compute_PSL(x):#计算PSL
+     n=x.size
+     x_abs=np.abs(x)    
+     psl_x=np.max(x_abs[0:n//2])
+     return psl_x
+
+def compute_ISL(x):#计算ISL
+     n=x.size
+     L=n//2
+     x_abs=np.abs(x)    
+     isl_x=np.sum(np.square(x_abs[0:n//2]))   
+     return isl_x
+
+#####非周期，补0
+def correlation_nonorm(f, g):
+    n, m = f.size, g.size
+    y = np.zeros(n+m-1, dtype=float)
+    g = g[::-1]  ####和卷积不同的地方
+
+    f, g = np.r_[f, np.zeros(y.size-n)], np.r_[g, np.zeros(y.size-m)]
+#    print(f)
+#    print(g)
+
+    for i in range(y.size):
+
+        for j in range(y.size):
+#            print(f[j],g[i-j])
+            y[i] += f[j] * g[i-j]
+#            print(y)
+#    y_norm=y/n
+    y_norm=y/1
+    return y_norm
+
+def compute_PSL_square(x):
+     n=x.size    
+     x_abs=np.abs(x)   
+     psl_x=np.max(x_abs[0:n//2])
+     psl_square_x=np.square(psl_x)     
+     return psl_x,psl_square_x
+
+def compute_ISL_MF(x):
+     n=x.size
+     L=n//2
+     x_abs=np.abs(x)
+     isl_x=2*np.sum(np.square(x_abs[0:n//2]))
+     mf_x=np.square(L+1)/isl_x    
+     return isl_x,mf_x
+ 
+######## reward definition - complementary code
+def calc_reward_cdma(currentState,J,M,N):
+    # Code set
+    aFig =np.reshape(np.array(currentState),[J,M,N])
+
+    res_alluser=np.zeros((1,J))
+    for j_user in range(J):
+        res=np.zeros((M,2*N+N-1))
+        for m in range(M):
+            codeA1=aFig[j_user,m,:]
+            res[m,:] = np.correlate(np.tile(codeA1, 2), codeA1, 'full')
+        res_alluser[-1,j_user]=np.sum(np.abs(np.sum(res[:,N:2*N-1],axis=0)))   
+
+    
+    res_cross_alluser=np.zeros((1,J*(J-1)//2))
+    for j_user in range(J-1):
+        for j1_user in range(j_user+1,J):
+            res_cross_=np.zeros((M,2*N+N-1))
+            for m in range(M):
+                codeA1=aFig[j_user,m,:]
+                codeB1=aFig[j1_user,m,:]
+                res_cross_[m,:] = np.correlate(np.tile(codeA1, 2), codeB1, 'full')
+            res_cross_alluser[-1,j_user+j1_user-1]=np.sum(np.abs(np.sum(res_cross_[:,N:2*N],axis=0)))   
+
+    
+    res_flipped=np.zeros((1,N))
+    for tau in range(1,N):
+        temp_alluser=np.zeros((1,J))
+        for j_user in range(J):
+            temp=np.zeros((M,1))
+            for m in range(M):
+                codeA1=aFig[j_user,m,:]
+                temp[m,:]=np.dot(codeA1[range(N-tau)], codeA1[range(tau,N)]) - np.dot(codeA1[range(N-tau,N)], codeA1[range(tau)])
+            temp_alluser[-1,j_user]=np.sum(np.abs(np.sum(temp,axis=0))) 
+        res_flipped[-1,tau]=np.sum(temp_alluser)
+
+
+    res_flippedcross=np.zeros((1,N))
+    for tau in range(1,N):
+        temp_alluser=np.zeros((1,J*(J-1)//2))
+        for j_user in range(J-1):
+            for j1_user in range(j_user+1,J):
+                temp=np.zeros((M,1))
+                for m in range(M):
+                    codeA1=aFig[j_user,m,:]
+                    codeB1=aFig[j1_user,m,:]
+                    temp[m,:]=np.dot(codeA1[range(N-tau)], codeB1[range(tau,N)]) - np.dot(codeA1[range(N-tau,N)], codeB1[range(tau)])
+                temp_alluser[-1,j_user+j1_user-1]=np.sum(np.abs(np.sum(temp,axis=0))) 
+        res_flippedcross[-1,tau]=np.sum(temp_alluser)
+
+    metricall=np.sum(res_alluser)+np.sum(res_cross_alluser)+np.sum(res_flipped)+np.sum(res_flippedcross)
+    return metricall
+
+
+
+######### reward definition - pulse compression radar 要最大化该指标而不是最小化
+def calc_reward_radar(seq1):
+    # detect error
+    if 0 in seq1:
+        print("Reward Error - inputs contain 0")
+        pdb.set_trace()
+    seq=np.array(seq1)
+    lenSeq = len(seq)
+    matrixC = np.zeros([lenSeq,2*lenSeq-2])
+
+    shift = 1 - lenSeq
+    xx = 0
+    while shift <= lenSeq - 1:
+        if shift != 0:
+            vecS = f_shiftadd0(seq, shift)
+            matrixC[:,xx] = vecS
+            xx += 1
+        shift += 1
+    matrixR = np.dot(matrixC, matrixC.T)
+
+    try:
+        temp1 = np.dot(seq,np.linalg.inv(matrixR))
+    except:
+        print("Error when calculating inverse")
+        print("======================================================")
+        print("======================================================")
+        print("======================================================")
+        return -1, 0
+    MF = np.dot(temp1,seq.T)
+    return  MF
+
+
+def f_shiftadd0(seq, shift):
+    if shift > 0:
+        return np.concatenate((np.zeros([shift]),seq[:-shift]),axis=0)
+    else:
+        return np.concatenate((seq[-shift:],np.zeros([-shift])),axis=0)
+
+############################## gan
+# Training Params
+
+##
+######barker
+
+data=data=sio.loadmat('data_barker_N31_name_a.mat')   
+
+all_trainingdata2=data['all_trainingdata2_v']
+
+print(all_trainingdata2)
+all_trainingdata2=np.real(all_trainingdata2)
+all_metric_true2=data['all_metric_true2_v']
+
+n_sample,n_input=np.shape(all_trainingdata2)
+print(n_sample,n_input)
+Juser=2
+Mge=2
+Nchang=n_input//(Juser*Mge)
+
+PAPR_dB_train=all_metric_true2[0]
+print(PAPR_dB_train)
+index_max=np.argmax(PAPR_dB_train)
+index_min=np.argmin(PAPR_dB_train)
+PAPR_dB_train_max=PAPR_dB_train[index_max]
+PAPR_dB_train_min=PAPR_dB_train[index_min]
+
+PAPR_dB_train_max_seq=all_trainingdata2[index_max,:]
+PAPR_dB_train_min_seq=all_trainingdata2[index_min,:]
+print(PAPR_dB_train_max,PAPR_dB_train_min)
+print(PAPR_dB_train_max_seq,PAPR_dB_train_min_seq)
+
+print(n_sample,n_input)
+
+
+all_trainingdata2dnn=np.reshape(all_trainingdata2,(-1,n_input))
+
+##############
+num_update=2
+
+batch_size = 100
+num_steps = n_sample//batch_size
+
+learning_rate = 0.0001
+# Network Params
+image_dim = n_input # 28*28 pixels
+
+gen_hidden_dim = 1024
+disc_hidden_dim = 1024
+noise_dim = 100 # Noise data points
+
+# A custom initialization (see Xavier Glorot init)
+def glorot_init(shape):
+    return tf.random_normal(shape=shape, stddev=1. / tf.sqrt(shape[0] / 2.))#tf.random_normal()函数用于从“服从指定正态分布的序列”中随机取出指定个数的值。
+
+# Store layers weight & bias
+weights = {
+    'gen_hidden1': tf.Variable(glorot_init([noise_dim, gen_hidden_dim])),#tf.Variable(initializer,name),参数initializer是初始化参数，name是可自定义的变量名称，
+    'gen_out': tf.Variable(glorot_init([gen_hidden_dim, image_dim])),
+    'disc_hidden1': tf.Variable(glorot_init([image_dim, disc_hidden_dim])),
+    'disc_out': tf.Variable(glorot_init([disc_hidden_dim, 1])),
+}
+biases = {
+    'gen_hidden1': tf.Variable(tf.zeros([gen_hidden_dim])),
+    'gen_out': tf.Variable(tf.zeros([image_dim])),
+    'disc_hidden1': tf.Variable(tf.zeros([disc_hidden_dim])),
+    'disc_out': tf.Variable(tf.zeros([1])),
+}
+
+
+# Generator
+def generator(x):
+    hidden_layer = tf.matmul(x, weights['gen_hidden1'])#将矩阵 a 乘以矩阵 b,生成a * b输入必须在任何转换之后是 rank> = 2 的张量,其中内部 2 维度指定有效的矩阵乘法参数,并且任何其他外部维度匹配.
+    hidden_layer = tf.add(hidden_layer, biases['gen_hidden1'])#将参数相加
+    hidden_layer = tf.nn.relu(hidden_layer)#tf.nn.relu()函数的目的是，将输入小于0的值幅值为0，输入大于0的值不变。
+    out_layer = tf.matmul(hidden_layer, weights['gen_out'])
+    out_layer = tf.add(out_layer, biases['gen_out'])
+#    out_layer = tf.nn.sigmoid(out_layer)
+    out_layer = tf.nn.tanh(out_layer)
+#    out_layer = tf.sign(out_layer)
+    return out_layer
+
+
+# Discriminator
+def discriminator(x):
+    hidden_layer = tf.matmul(x, weights['disc_hidden1'])
+    hidden_layer = tf.add(hidden_layer, biases['disc_hidden1'])
+    hidden_layer = tf.nn.relu(hidden_layer)
+    out_layer = tf.matmul(hidden_layer, weights['disc_out'])
+    out_layer = tf.add(out_layer, biases['disc_out'])
+    out_layer = tf.nn.sigmoid(out_layer)
+    return out_layer
+
+# Build Networks
+# Network Inputs
+gen_input = tf.placeholder(tf.float32, shape=[None, noise_dim], name='input_noise')#tf.placeholder()函数作为一种占位符用于定义过程，可以理解为形参，在执行的时候再赋具体的值。
+
+disc_input = tf.placeholder(tf.float32, shape=[None, image_dim], name='disc_input')
+
+# Build Generator Network
+gen_sample = generator(gen_input)
+
+# Build 2 Discriminator Networks (one from noise input, one from generated samples)
+disc_real = discriminator(disc_input)
+disc_fake = discriminator(gen_sample)
+
+# Build Loss
+gen_loss = -tf.reduce_mean(tf.log(disc_fake+ 1e-17))#计算张量的各个维度上的元素的平均值. 
+disc_loss = -tf.reduce_mean(tf.log(disc_real+ 1e-17) + tf.log(1. - disc_fake+ 1e-17))
+#disc_loss = -tf.reduce_mean(tf.log(disc_real) -tf.log( disc_fake))
+# Build Optimizers
+optimizer_gen = tf.train.AdamOptimizer(learning_rate=learning_rate)#Adam优化算法：是一个寻找全局最优点的优化算法，引入了二次方梯度校正。
+optimizer_disc = tf.train.AdamOptimizer(learning_rate=learning_rate)
+
+# Training Variables for each optimizer
+# By default in TensorFlow, all variables are updated by each optimizer, so we
+# need to precise for each one of them the specific variables to update.
+# Generator Network Variables
+gen_vars = [weights['gen_hidden1'], weights['gen_out'],
+            biases['gen_hidden1'], biases['gen_out']]
+# Discriminator Network Variables
+disc_vars = [weights['disc_hidden1'], weights['disc_out'],
+            biases['disc_hidden1'], biases['disc_out']]
+
+# Create training operations
+train_gen = optimizer_gen.minimize(gen_loss, var_list=gen_vars)#optimizer(learning_rate).minimize(loss)实现自动梯度下降。minimize()也是两步操作的合并，后边会分解。
+train_disc = optimizer_disc.minimize(disc_loss, var_list=disc_vars)
+
+# Initialize the variables (i.e. assign their default value)
+init = tf.global_variables_initializer()#使用tf.Variable定义变量则需要对所有变量进行初始化，
+
+
+SNR_db=np.arange(0, 12, 0.5) ##间隔0.5
+#    SNR_db=np.linspace(4,15,1)
+SNR=10.0**(SNR_db/10.0)
+prob_dl=[0.]*len(SNR)
+prob_org=[0.]*len(SNR)
+gen_data_seq=[]
+gen_onlydata_seq=[]
+gen_data_paprdb=[]
+#threshols=5
+threshols=PAPR_dB_train_max+5  ####初始门限
+alpha=10
+beta=10
+theta=0.8
+# Start training
+with tf.Session() as sess:
+
+    # Run the initializer
+    sess.run(init)
+
+    for i in range(1, 10001):
+        # Prepare Data
+        # Get the next batch of MNIST data (only images are needed, not labels)
+#        batch_x = mnist.train.next_batch(batch_size)
+        
+        for i_step in range(num_steps):
+        
+            batch_x=all_trainingdata2dnn[int(i_step*batch_size):int((i_step+1)*batch_size)]
+            
+            # Generate noise to feed to the generator
+            z = np.random.uniform(-1., 1., size=[batch_size, noise_dim])
+    
+            # Train
+            feed_dict = {disc_input: batch_x, gen_input: z}
+            _, _, gl, dl, g_train,disc_realv,disc_fakev,wg1= sess.run([train_gen, train_disc, gen_loss, disc_loss,gen_sample,disc_real,disc_fake,weights['gen_hidden1']],
+                                    feed_dict=feed_dict)
+#            g_train_seq=np.sign(g_train[0])  ###(batch,nifft)
+            aa=np.array(np.isnan(g_train))
+            if np.sum(aa)!=0:
+                print('disc_realv',disc_realv)
+                print('disc_fakev',disc_fakev)
+                print('weightsgen_hidden1',wg1)
+#                print("g_train",g_train)
+            g_train_seq=np.sign(g_train+ 1e-17)  ###(batch,nifft*K),归一化
+
+            
+            ####################计算指标
+            metric=np.zeros((batch_size))
+#            metric_PSL=np.zeros((batch_size))
+#            metric_MF=np.zeros((batch_size))
+            for n in range(batch_size):
+                A_temp=g_train_seq[n]
+
+#                metric[n]=calc_reward_cdma(A_temp,Juser,Mge,Nchang)
+                acf1=correlation_nonorm(A_temp,A_temp)
+                psl1,pslsqu1=compute_PSL_square(acf1)
+                isl1,mf1=compute_ISL_MF(acf1)                
+                metric[n]=theta*2*pslsqu1+(1-theta)*isl1
+#                metric_PSL[n]=psl1
+#                metric_MF[n]=mf1
+#                metric[n]=calc_reward_radar(A_temp)
+        
+                ######papr <3db,lable为1,最大内集小于0.5的
+            gen_seq_add,papr_db_add=metric_lable_compute_thres(g_train_seq,metric,threshols)
+         
+
+            if len(papr_db_add)!=0:
+#                all_trainingdata2=np.vstack((all_trainingdata2,xtrain_papr_true))
+#                gen_data_seq.append(gen_seq_add)
+                gen_data_seq.extend(gen_seq_add)
+          
+                gen_data_paprdb.extend(papr_db_add)
+#                print("gen_data_paprdb",gen_data_paprdb)
+#                print("gen_data_seq",gen_data_seq)
+            
+            if i % 20 == 0 and len(gen_data_paprdb)!=0:
+#                print("m,n",np.shape(gen_data_seq))
+#                print("m1,n1",np.shape(gen_data_paprdb))
+                gen_data_seq1=np.reshape(gen_data_seq,(-1,n_input))           
+                gen_data_paprdb1=np.reshape(gen_data_paprdb,(1,-1))
+#                gen_data_seq1=np.transpose(gen_data_seq,(1,0,2))
+#                gen_data_paprdb1=np.transpose(gen_data_paprdb)
+#                all_trainingdata2=np.vstack((all_trainingdata2,gen_data_seq1[0]))
+#                PAPR_dB_train=np.hstack((PAPR_dB_train,gen_data_paprdb1[0]))
+#                print(gen_data_seq1)
+                print("gen_data_paprdb1",gen_data_paprdb1[0])
+                print("n_sampleold",np.shape(all_trainingdata2dnn))
+                all_trainingdata2dnn=np.vstack((all_trainingdata2dnn,gen_data_seq1))               
+                PAPR_dB_train=np.hstack((PAPR_dB_train,gen_data_paprdb1[0]))
+#                print(gen_data_seq[:][0][:])
+#                print(gen_data_paprdb[:][0])
+                gen_data_seq=[]
+                gen_data_paprdb=[]
+                n_sample,n_inputdnn=np.shape(all_trainingdata2dnn)
+                print("n_sampleold2",n_sample,n_inputdnn)
+                if n_sample>600:
+                    index_papr_all=np.argsort(PAPR_dB_train)
+                    PAPR_dB_trainnew=PAPR_dB_train[index_papr_all]
+                    all_trainingdata2new=all_trainingdata2dnn[index_papr_all,:]
+                    
+                    all_trainingdata2dnn=all_trainingdata2new[0:600,:]            
+                    PAPR_dB_train=PAPR_dB_trainnew[0:600]
+                n_sample,n_inputdnn=np.shape(all_trainingdata2dnn)                
+                num_steps = n_sample//batch_size  
+                print("n_sample",n_sample,n_inputdnn,n_sample//batch_size)
+                
+                index_max_gen=np.argmax(PAPR_dB_train)
+                index_min_gen=np.argmin(PAPR_dB_train)
+                print(index_max_gen,index_min_gen)
+                PAPR_dB_gen_max=PAPR_dB_train[index_max_gen]
+                PAPR_dB_gen_min=PAPR_dB_train[index_min_gen]
+                
+                PAPR_dB_gen_max_seq=all_trainingdata2dnn[index_max_gen,:]
+                PAPR_dB_gen_min_seq=all_trainingdata2dnn[index_min_gen,:]
+                print(PAPR_dB_gen_max,PAPR_dB_gen_min)
+#                print(np.real(PAPR_dB_gen_min_seq))
+                PAPR_dB_gen_min_seqdnn=np.reshape(np.real(PAPR_dB_gen_min_seq),(-1,n_input))
+                acf1_gen=correlation_nonorm(PAPR_dB_gen_min_seqdnn[0],PAPR_dB_gen_min_seqdnn[0])
+                psl1_gen,pslsqu1_gen=compute_PSL_square(acf1_gen)
+                isl1_gen,mf1_gen=compute_ISL_MF(acf1_gen)
+                print(PAPR_dB_gen_min_seqdnn)
+                print("psl",psl1_gen)
+                print("mf",mf1_gen)
+                threshols=PAPR_dB_gen_max
+#            
+
+            
+            if i % 200 == 0 or i == 1:
+                print('epoch %i: Generator Loss: %f, Discriminator Loss: %f' % (i, gl, dl))
+sio.savemat('data_barker_N31_name_pythongansto1.mat',{'all_trainingdata2_v':g_train_seq,'all_metric_true2_v':PAPR_dB_train})
